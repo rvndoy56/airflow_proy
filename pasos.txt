@@ -1,0 +1,33 @@
+Al levantar el docker hacer lo siguiente:
+Dentro de airflow en Admin>Connections
+Agregar la conexion de la base de datos
+ - Tipo de Conexion: MySQL
+ - Connection id: mysql_conn_id
+
+ Agregar la conexion de aws
+ - Tipo de Conexion: Amazon Web Services
+ - Connection id: aws_default
+ - AWS Access Key id
+ - AWS Secret Acess Key 
+
+
+ Agregar la politica (Pestaña permisos) al bucket en AWS S3 
+ {
+    "Version": "2012-10-17",
+    "Id": "Policy1729659777722",
+    "Statement": [
+        {
+            "Sid": "Stmt1729659775231",
+            "Effect": "Allow",
+            "Principal": {
+                        //arn:aws:iam::userId:user/user-name --> borrar esta linea
+                "AWS": "arn:aws:iam::654654589924:user/fhuerta-test"
+            },
+            "Action": [
+                "s3:PutObject", //Permiso para escribir
+                "s3:GetObject"  //Permiso para leer
+            ],
+            "Resource": "arn:aws:s3:::aws-bucket-grupo3/*"
+        }
+    ]
+}
