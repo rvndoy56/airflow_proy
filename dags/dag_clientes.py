@@ -10,7 +10,7 @@ default_args = {
     'retries': 1,
 }
 
-BUCKET_NAME="aws-bucket-grupo3"
+BUCKET_NAME="grupo3-202410"
 CSV_FILE_PATH="/tmp/operaciones.csv"
 S3_OBJECT_NAME="landing/customers/clientes.csv"
 transformed_data_global = []
@@ -38,18 +38,22 @@ def mysql_example_dag():
         return rows
 
     # Task 2: Transform the extracted data
-    #@task
-    #def transform_data(data):
-    #    transformed_data = []
-    #    for row in data:
-    #        transformed_data.append({
-    #            "id": row[0],
-    #            "name": f"test1_{row[1].upper()}",  # Example transformation: uppercase the name
-    #            "value": row[2]    # Example transformation: multiply value by 100
-    #        })
-    #    print(f"Transformed data: {transformed_data}")
-    #    return transformed_data
-
+    @task
+    def transform_data(data):
+       transformed_data = []
+       for row in data:
+           transformed_data.append({
+               "id_cliente": row[0],
+               "nombre": row[1],
+               "apellido_pa": row[2],
+               "apellido_ma": row[3],
+               "direccion": row[4],
+               "tipo_documento": row[5],
+               "nro_documento": row[6],  
+               "correo": row[7], 
+           })
+       print(f"Transformed data: {transformed_data}")
+       return transformed_data
 
     #Crear archivo csv
     @task
@@ -58,10 +62,9 @@ def mysql_example_dag():
             rows = transformed_data
             print(f"Transformed data: {rows}")
             with open(CSV_FILE_PATH, 'w') as file:
-                file.write(str(rows))
-                #file.write("id,name,value\n")
-                #for row in rows:
-                #    file.write(f"{row['id']},{row['name']},{row['value']}\n")
+                file.write("id_cliente,nombre,apellido_pa,apellido_ma,direccion,tipo_documento,nro_documento,correo\n")
+                for row in rows:
+                    file.write(f"{row['id_cliente']},{row['nombre']},{row['apellido_pa']},{row['apellido_ma']},{row['direccion']},{row['tipo_documento']},{row['nro_documento']},{row['correo']}\n")
             print(f"Created CSV file: {CSV_FILE_PATH}")
             return CSV_FILE_PATH
         except Exception as e:
@@ -90,9 +93,9 @@ def mysql_example_dag():
 
     # Define task dependencies
     data = extract_data_from_mysql()
-    csv_file_path = create_csv(data)
+    transformed_data = transform_data(data)
+    csv_file_path = create_csv(transformed_data)
     upload_csv_to_s3(csv_file_path)
-    #transformed_data = transform_data(data)
 
 # Instantiate the DAG
 mysql_example_dag_dag = mysql_example_dag()

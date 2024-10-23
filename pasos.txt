@@ -12,22 +12,24 @@ Agregar la conexion de la base de datos
 
 
  Agregar la politica (Pestaña permisos) al bucket en AWS S3 
- {
-    "Version": "2012-10-17",
-    "Id": "Policy1729659777722",
-    "Statement": [
-        {
-            "Sid": "Stmt1729659775231",
-            "Effect": "Allow",
-            "Principal": {
-                        //arn:aws:iam::userId:user/user-name --> borrar esta linea
-                "AWS": "arn:aws:iam::654654589924:user/fhuerta-test"
-            },
-            "Action": [
-                "s3:PutObject", //Permiso para escribir
-                "s3:GetObject"  //Permiso para leer
-            ],
-            "Resource": "arn:aws:s3:::aws-bucket-grupo3/*"
-        }
-    ]
+{
+	"Version": "2012-10-17",
+	"Id": "Policy1729659777722",
+	"Statement": [
+		{
+			"Sid": "Stmt1729659775231",
+			"Effect": "Allow",
+			"Principal": {
+				"AWS": [
+					"arn:aws:iam::654654589924:user/GRUPO3_TEST_USER",
+					"arn:aws:iam::654654589924:user/fhuerta-test"
+				]
+			},
+			"Action": [
+				"s3:PutObject",
+				"s3:GetObject"
+			],
+			"Resource": "arn:aws:s3:::grupo3-202410/*"
+		}
+	]
 }
