@@ -12,10 +12,11 @@ default_args = {
 
 BUCKET_NAME="grupo3-202410"
 CSV_FILE_PATH="/tmp/operaciones.csv"
-S3_OBJECT_NAME="landing/customers/clientes.csv"
+S3_OBJECT_NAME="landing/customers/producto.csv"
 transformed_data_global = []
+
 # Define the DAG
-@dag(default_args=default_args, schedule_interval='@daily', start_date=days_ago(1), catchup=False, tags=['mysql_example'])
+@dag(dag_id="dag_producto",default_args=default_args, schedule_interval='@daily', start_date=days_ago(1), catchup=False, tags=['mysql_airflow_producto'])
 def mysql_example_dag():
 
     # Task 1: Extract data from MySQL
@@ -24,7 +25,7 @@ def mysql_example_dag():
         # Create a MySQL hook to connect to the database
         mysql_hook = MySqlHook(mysql_conn_id='mysql_conn_id')
         # Define the query to extract data
-        query = "select * from db_grupo_03.Cliente"
+        query = "select * from `bd-grupo-3`.Producto"
         # Run the query and fetch results
         connection = mysql_hook.get_conn()
         cursor = connection.cursor()
@@ -40,31 +41,30 @@ def mysql_example_dag():
     # Task 2: Transform the extracted data
     @task
     def transform_data(data):
-       transformed_data = []
-       for row in data:
-           transformed_data.append({
-               "id_cliente": row[0],
-               "nombre": row[1],
-               "apellido_pa": row[2],
-               "apellido_ma": row[3],
-               "direccion": row[4],
-               "tipo_documento": row[5],
-               "nro_documento": row[6],  
-               "correo": row[7], 
-           })
-       print(f"Transformed data: {transformed_data}")
-       return transformed_data
+        transformed_data = []
+        for row in data:
+            transformed_data.append({
+                "cod_producto": row[0],
+                "unidad_medida": row[1],
+                "tipo_moneda": row[2],
+                "costo_promedio_unitario": row[3],
+                "precio_unitario": row[4],
+                "stock_minimo": row[5],
+                "stock_maximo": row[6]
+            })
+        print(f"Transformed data: {transformed_data}")
+        return transformed_data
 
-    #Crear archivo csv
+    # Task 3: Create CSV file
     @task
     def create_csv(transformed_data):
         try:
             rows = transformed_data
             print(f"Transformed data: {rows}")
             with open(CSV_FILE_PATH, 'w') as file:
-                file.write("id_cliente,nombre,apellido_pa,apellido_ma,direccion,tipo_documento,nro_documento,correo\n")
+                file.write("cod_producto,unidad_medida,tipo_moneda,costo_promedio_unitario,precio_unitario,stock_minimo,stock_maximo\n")
                 for row in rows:
-                    file.write(f"{row['id_cliente']},{row['nombre']},{row['apellido_pa']},{row['apellido_ma']},{row['direccion']},{row['tipo_documento']},{row['nro_documento']},{row['correo']}\n")
+                    file.write(f"{row['cod_producto']},{row['unidad_medida']},{row['tipo_moneda']},{row['costo_promedio_unitario']},{row['precio_unitario']},{row['stock_minimo']},{row['stock_maximo']}\n")
             print(f"Created CSV file: {CSV_FILE_PATH}")
             return CSV_FILE_PATH
         except Exception as e:
@@ -83,13 +83,6 @@ def mysql_example_dag():
             print(f"Uploaded CSV to S3: {S3_OBJECT_NAME}")
         except Exception as e:
             print(f"Error uploading CSV to S3: {e}")
-
-    #@task
-    #def read_csv():
-    #    with open('/tmp/operaciones.csv', 'r') as file:
-    #        data = file.read()
-    #    print(f"Read data from CSV: {data}")
-    #    return data
 
     # Define task dependencies
     data = extract_data_from_mysql()
