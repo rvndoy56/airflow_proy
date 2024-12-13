@@ -14,12 +14,12 @@ default_args = {
 BUCKET_NAME = "grupo3-202410"
 CSV_FILE_PATH = "/tmp/operaciones.csv"
 # Base path for the S3 object
-S3_BASE_PATH = "landing/customers/"
+S3_BASE_PATH = "landing/customers/clientes"
 LAST_EXTRACTION_VAR = "last_extraction_date_cliente"  # Nombre de la Variable en Airflow
 
 
 @dag(dag_id="dag_cliente", default_args=default_args, schedule_interval='@daily', start_date=days_ago(1), catchup=False, tags=['mysql_airflow_cliente'])
-def mysql_example_dag():
+def mysql_example_dag():    
 
     @task
     def extract_data_from_mysql():
@@ -32,7 +32,7 @@ def mysql_example_dag():
         if last_extraction_date:
             query = f"""
                 SELECT * FROM `bd-grupo-3-v2`.Cliente 
-                WHERE fecha_extraccion > '{last_extraction_date}' 
+                WHERE fecha_extraccion > '{last_extraction_date.strftime("%d-%m-%Y_%H-%M-%S")}' 
                 ORDER BY fecha_extraccion DESC
             """
         else:
@@ -75,7 +75,7 @@ def mysql_example_dag():
 
             # Obtener la última fecha de los registros transformados
             last_extraction_date = max([row['fecha_extraccion'] for row in transformed_data])
-            s3_object_name = f"{S3_BASE_PATH}clientes_{last_extraction_date.strftime('%Y-%m-%d_%H-%M-%S')}.csv"
+            s3_object_name = f"{S3_BASE_PATH}_{last_extraction_date.strftime('%Y-%m-%d_%H-%M-%S')}.csv"
 
             # Crear el archivo CSV
             with open(CSV_FILE_PATH, 'w') as file:

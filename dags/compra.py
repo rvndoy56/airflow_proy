@@ -4,29 +4,49 @@ from airflow.providers.mysql.hooks.mysql import MySqlHook
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.models import Variable
 
+from datetime import datetime
+
 # Default arguments for the DAG
 default_args = {
     'owner': 'airflow',
     'retries': 1,
 }
 
-BUCKET_NAME="grupo3-202410"
-CSV_FILE_PATH="/tmp/operaciones.csv"
-S3_OBJECT_NAME="landing/customers/compra.csv"
-transformed_data_global = []
+BUCKET_NAME = "grupo3-202410"
+CSV_FILE_PATH = "/tmp/operaciones.csv"
+S3_BASE_PATH = "landing/shopping/compras"
+LAST_EXTRACTION_VAR = "last_extraction_date_compra"  # Nombre de la Variable en Airflow
+
 # Define the DAG
-@dag(dag_id="dag_compra",default_args=default_args, schedule_interval='@daily', start_date=days_ago(1), catchup=False, tags=['mysql_airflow_compra'])
+@dag(
+    dag_id="dag_compra",
+    default_args=default_args,
+    schedule_interval='@daily',
+    start_date=days_ago(1),
+    catchup=False,
+    tags=['mysql_airflow_compra']
+)
 def mysql_example_dag():
 
-#Campos de compra
-#id_compra,id_proveedor,cod_producto,cantidad_compra,costo_promedio_unitario,monto_compra,fecha_hora
     # Task 1: Extract data from MySQL
     @task
     def extract_data_from_mysql():
         # Create a MySQL hook to connect to the database
         mysql_hook = MySqlHook(mysql_conn_id='mysql_conn_id')
-        # Define the query to extract data
-        query = "select * from `bd-grupo-3`.Compra"
+        
+        # Obtener la última fecha de extracción desde las Variables de Airflow
+        last_extraction_date = Variable.get(LAST_EXTRACTION_VAR, default_var=None)
+
+        # Crear la consulta SQL dinámica
+        if last_extraction_date:
+            query = f"""
+                SELECT * FROM `bd-grupo-3`.Compra 
+                WHERE fecha_hora > '{last_extraction_date}' 
+                ORDER BY fecha_hora DESC
+            """
+        else:
+            query = "SELECT * FROM `bd-grupo-3`.Compra ORDER BY fecha_hora DESC"
+
         # Run the query and fetch results
         connection = mysql_hook.get_conn()
         cursor = connection.cursor()
@@ -42,9 +62,9 @@ def mysql_example_dag():
     # Task 2: Transform the extracted data
     @task
     def transform_data(data):
-       transformed_data = []
-       for row in data:
-           transformed_data.append({
+        transformed_data = []
+        for row in data:
+            transformed_data.append({
                 "id_compra": row[0],
                 "id_proveedor": row[1],
                 "cod_producto": row[2],
@@ -52,51 +72,65 @@ def mysql_example_dag():
                 "costo_promedio_unitario": row[4],
                 "monto_compra": row[5],
                 "fecha_hora": row[6]
-           })
-       print(f"Transformed data: {transformed_data}")
-       return transformed_data
+            })
+        print(f"Transformed data: {transformed_data}")
+        return transformed_data
 
-    #Crear archivo csv
+    # Task 3: Crear archivo CSV
     @task
     def create_csv(transformed_data):
         try:
-            rows = transformed_data
-            print(f"Transformed data: {rows}")
+            if not transformed_data:
+                raise ValueError("No data available to create CSV.")
+            
+            # Obtener la última fecha de los registros transformados
+            last_extraction_date = max([row['fecha_hora'] for row in transformed_data])
+            s3_object_name = f"{S3_BASE_PATH}_{last_extraction_date.strftime('%Y-%m-%d_%H-%M-%S')}.csv"
+
+            # Crear el archivo CSV
             with open(CSV_FILE_PATH, 'w') as file:
                 file.write("id_compra,id_proveedor,cod_producto,cantidad_compra,costo_promedio_unitario,monto_compra,fecha_hora\n")
-                for row in rows:
+                for row in transformed_data:
                     file.write(f"{row['id_compra']},{row['id_proveedor']},{row['cod_producto']},{row['cantidad_compra']},{row['costo_promedio_unitario']},{row['monto_compra']},{row['fecha_hora']}\n")
             print(f"Created CSV file: {CSV_FILE_PATH}")
-            return CSV_FILE_PATH
+            return {"csv_file_path": CSV_FILE_PATH, "s3_object_name": s3_object_name, "last_extraction_date": last_extraction_date}
         except Exception as e:
             print(f"Error creating CSV file: {e}")
+            return None
 
+    # Task 4: Subir CSV a S3
     @task
-    def upload_csv_to_s3(csv_file_path):
+    def upload_csv_to_s3(csv_object_data):
         s3_hook = S3Hook(aws_conn_id="aws_default")
+        csv_file_path = csv_object_data.get("csv_file_path")
+        s3_object_name = csv_object_data.get("s3_object_name")
         try:
             s3_hook.load_file(
                 filename=csv_file_path,
-                key=S3_OBJECT_NAME,
+                key=s3_object_name,
                 bucket_name=BUCKET_NAME,
                 replace=True
             )
-            print(f"Uploaded CSV to S3: {S3_OBJECT_NAME}")
+            print(f"Uploaded CSV to S3: {s3_object_name}")
         except Exception as e:
             print(f"Error uploading CSV to S3: {e}")
 
-    #@task
-    #def read_csv():
-    #    with open('/tmp/operaciones.csv', 'r') as file:
-    #        data = file.read()
-    #    print(f"Read data from CSV: {data}")
-    #    return data
+    # Task 5: Actualizar la Variable de Airflow
+    @task
+    def update_last_extraction_date(csv_object_data):
+        last_extraction_date = csv_object_data.get("last_extraction_date")
+        formatted_date = last_extraction_date.strftime('%Y-%m-%d %H:%M:%S')
+
+        # Actualiza la Variable de Airflow con la nueva fecha de extracción
+        Variable.set(LAST_EXTRACTION_VAR, formatted_date)
+        print(f"Updated last extraction date to: {formatted_date}")
 
     # Define task dependencies
     data = extract_data_from_mysql()
     transformed_data = transform_data(data)
-    csv_file_path = create_csv(transformed_data)
-    upload_csv_to_s3(csv_file_path)
+    csv_object_data = create_csv(transformed_data)
+    upload_csv_to_s3(csv_object_data)
+    update_last_extraction_date(csv_object_data)
 
 # Instantiate the DAG
 mysql_example_dag_dag = mysql_example_dag()

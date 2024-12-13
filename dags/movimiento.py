@@ -10,25 +10,34 @@ default_args = {
     'retries': 1,
 }
 
-BUCKET_NAME="grupo3-202410"
-CSV_FILE_PATH="/tmp/operaciones.csv"
-S3_OBJECT_NAME="landing/customers/movimiento.csv"
-transformed_data_global = []
-# Define the DAG
-@dag(dag_id="dag_movimiento",default_args=default_args, schedule_interval='@daily', start_date=days_ago(1), catchup=False, tags=['mysql_airflow_movimiento'])
-def mysql_example_dag():
+BUCKET_NAME = "grupo3-202410"
+CSV_FILE_PATH = "/tmp/movimientos.csv"
+S3_BASE_PATH = "landing/movimientos/movimientos"
+LAST_EXTRACTION_VAR = "last_extraction_date_movimiento"  # Nombre de la Variable en Airflow
 
-#Campos de Movimiento
-#id_movimiento,fecha_hora,cod_producto,tipo_moneda,cantidad,id_compra,id_venta,costo_promedio_unitario,precio_unitario,clase
+# Define the DAG
+@dag(dag_id="dag_movimiento", default_args=default_args, schedule_interval='@daily', start_date=days_ago(1), catchup=False, tags=['mysql_airflow_movimiento'])
+def mysql_example_dag():
 
     # Task 1: Extract data from MySQL
     @task
     def extract_data_from_mysql():
-        # Create a MySQL hook to connect to the database
         mysql_hook = MySqlHook(mysql_conn_id='mysql_conn_id')
-        # Define the query to extract data
-        query = "select * from `bd-grupo-3`.Movimiento_producto"
-        # Run the query and fetch results
+
+        # Obtener la última fecha de extracción desde las Variables de Airflow
+        last_extraction_date = Variable.get(LAST_EXTRACTION_VAR, default_var=None)
+
+        # Crear la consulta SQL dinámica
+        if last_extraction_date:
+            query = f"""
+                SELECT * FROM `bd-grupo-3-v2`.Movimiento_producto
+                WHERE fecha_hora > '{last_extraction_date.strftime("%d-%m-%Y_%H-%M-%S")}'
+                ORDER BY fecha_hora DESC
+            """
+        else:
+            query = "SELECT * FROM `bd-grupo-3-v2`.Movimiento_producto ORDER BY fecha_hora DESC"
+
+        # Ejecutar la consulta y recuperar datos
         connection = mysql_hook.get_conn()
         cursor = connection.cursor()
         cursor.execute(query)
@@ -36,16 +45,15 @@ def mysql_example_dag():
         cursor.close()
         connection.close()
 
-        # Return the fetched rows
-        print(f"Extracted rows: {rows}")
+        print(f"Extracted {len(rows)} rows from MySQL.")
         return rows
 
     # Task 2: Transform the extracted data
     @task
     def transform_data(data):
-       transformed_data = []
-       for row in data:
-           transformed_data.append({
+        transformed_data = []
+        for row in data:
+            transformed_data.append({
                 "id_movimiento": row[0],
                 "fecha_hora": row[1],
                 "cod_producto": row[2],
@@ -56,51 +64,68 @@ def mysql_example_dag():
                 "costo_promedio_unitario": row[7],
                 "precio_unitario": row[8],
                 "clase": row[9]
-           })
-       print(f"Transformed data: {transformed_data}")
-       return transformed_data
+            })
+        print(f"Transformed data: {transformed_data}")
+        return transformed_data
 
-    #Crear archivo csv
+    # Task 3: Create CSV file
     @task
     def create_csv(transformed_data):
         try:
-            rows = transformed_data
-            print(f"Transformed data: {rows}")
+            if not transformed_data:
+                raise ValueError("No data available to create CSV.")
+
+            # Obtener la última fecha de los registros transformados
+            last_extraction_date = max([row['fecha_extraccion'] for row in transformed_data])
+            s3_object_name = f"{S3_BASE_PATH}_{last_extraction_date.strftime('%Y-%m-%d_%H-%M-%S')}.csv"
+
+            # Crear el archivo CSV
             with open(CSV_FILE_PATH, 'w') as file:
                 file.write("id_movimiento,fecha_hora,cod_producto,tipo_moneda,cantidad,id_compra,id_venta,costo_promedio_unitario,precio_unitario,clase\n")
-                for row in rows:
-                    file.write(f"{row['id_movimiento']},{row['fecha_hora']},{row['cod_producto']},{row['tipo_moneda']},{row['cantidad']},{row['id_compra']},{row['id_venta']},{row['costo_promedio_unitario']},{row['precio_unitario']},{row['clase']}\n")
+                for row in transformed_data:
+                    file.write(
+                        f"{row['id_movimiento']},{row['fecha_hora']},{row['cod_producto']},{row['tipo_moneda']},{row['cantidad']},{row['id_compra']},{row['id_venta']},{row['costo_promedio_unitario']},{row['precio_unitario']},{row['clase']}\n"
+                    )
             print(f"Created CSV file: {CSV_FILE_PATH}")
-            return CSV_FILE_PATH
+            return {"csv_file_path": CSV_FILE_PATH, "s3_object_name": s3_object_name, "last_extraction_date": last_extraction_date}
         except Exception as e:
             print(f"Error creating CSV file: {e}")
+            return None
 
+    # Task 4: Upload CSV to S3
     @task
-    def upload_csv_to_s3(csv_file_path):
+    def upload_csv_to_s3(csv_object_data):
         s3_hook = S3Hook(aws_conn_id="aws_default")
+
+        csv_file_path = csv_object_data.get("csv_file_path")
+        s3_object_name = csv_object_data.get("s3_object_name")
+
         try:
             s3_hook.load_file(
                 filename=csv_file_path,
-                key=S3_OBJECT_NAME,
+                key=s3_object_name,
                 bucket_name=BUCKET_NAME,
                 replace=True
             )
-            print(f"Uploaded CSV to S3: {S3_OBJECT_NAME}")
+            print(f"Uploaded CSV to S3: {s3_object_name}")
         except Exception as e:
             print(f"Error uploading CSV to S3: {e}")
 
-    #@task
-    #def read_csv():
-    #    with open('/tmp/operaciones.csv', 'r') as file:
-    #        data = file.read()
-    #    print(f"Read data from CSV: {data}")
-    #    return data
+    # Task 5: Update last extraction date in Airflow Variable
+    @task
+    def update_last_extraction_date(csv_object_data):
+        last_extraction_date = csv_object_data.get("last_extraction_date")
+
+        # Actualiza la Variable de Airflow con la nueva fecha de extracción
+        Variable.set(LAST_EXTRACTION_VAR, last_extraction_date.strftime('%Y-%m-%d %H:%M:%S'))
+        print(f"Updated last extraction date to: {last_extraction_date}")
 
     # Define task dependencies
     data = extract_data_from_mysql()
     transformed_data = transform_data(data)
-    csv_file_path = create_csv(transformed_data)
-    upload_csv_to_s3(csv_file_path)
+    csv_object_data = create_csv(transformed_data)
+    upload_csv_to_s3(csv_object_data)
+    update_last_extraction_date(csv_object_data)
 
 # Instantiate the DAG
 mysql_example_dag_dag = mysql_example_dag()
