@@ -11,10 +11,13 @@ default_args = {
 }
 
 BUCKET_NAME = "grupo3-202410"
-CSV_FILE_PATH = "/tmp/movimientos.csv"
+PARQUET_FILE_PATH = "/tmp/operaciones.parquet"
 S3_BASE_PATH = "landing/movimientos/movimientos"
 LAST_EXTRACTION_VAR = "last_extraction_date_movimiento"  # Nombre de la Variable en Airflow
-
+LAST_EXTRACTION_PART_VAR = "last_extraction_part_movimiento"
+NAME_BD="bd-grupo-3-v3"
+TABLE_BD="Movimiento_producto"
+COLUMNS_BD = [ "id_movimiento", "fecha_hora", "cod_producto", "tipo_moneda", "cantidad", "id_compra", "id_venta", "costo_promedio_unitario", "precio_unitario", "clase","fecha_extraccion"]
 # Define the DAG
 @dag(dag_id="dag_movimiento", default_args=default_args, schedule_interval='@daily', start_date=days_ago(1), catchup=False, tags=['mysql_airflow_movimiento'])
 def mysql_example_dag():
@@ -30,12 +33,12 @@ def mysql_example_dag():
         # Crear la consulta SQL dinámica
         if last_extraction_date:
             query = f"""
-                SELECT * FROM `bd-grupo-3-v2`.Movimiento_producto
+                SELECT * FROM `{NAME_BD}`.Movimiento_producto
                 WHERE fecha_hora > '{last_extraction_date.strftime("%d-%m-%Y_%H-%M-%S")}'
                 ORDER BY fecha_hora DESC
             """
         else:
-            query = "SELECT * FROM `bd-grupo-3-v2`.Movimiento_producto ORDER BY fecha_hora DESC"
+            query = f"SELECT * FROM `{NAME_BD}`.{TABLE_BD} ORDER BY fecha_hora DESC"
 
         # Ejecutar la consulta y recuperar datos
         connection = mysql_hook.get_conn()
@@ -53,79 +56,84 @@ def mysql_example_dag():
     def transform_data(data):
         transformed_data = []
         for row in data:
-            transformed_data.append({
-                "id_movimiento": row[0],
-                "fecha_hora": row[1],
-                "cod_producto": row[2],
-                "tipo_moneda": row[3],
-                "cantidad": row[4],
-                "id_compra": row[5],
-                "id_venta": row[6],
-                "costo_promedio_unitario": row[7],
-                "precio_unitario": row[8],
-                "clase": row[9]
-            })
+            for column in COLUMNS_BD:
+                transformed_data.append({
+                    column: row[COLUMNS_BD[column]]
+                })
         print(f"Transformed data: {transformed_data}")
         return transformed_data
 
     # Task 3: Create CSV file
     @task
-    def create_csv(transformed_data):
+    def create_parquet(transformed_data):
         try:
             if not transformed_data:
-                raise ValueError("No data available to create CSV.")
+                raise ValueError("No data available to create Parquet.")
+
+            # Convertir los datos transformados a una tabla de Apache Arrow
+            table = pa.Table.from_pylist(transformed_data)
 
             # Obtener la última fecha de los registros transformados
             last_extraction_date = max([row['fecha_extraccion'] for row in transformed_data])
-            s3_object_name = f"{S3_BASE_PATH}_{last_extraction_date.strftime('%Y-%m-%d_%H-%M-%S')}.csv"
 
-            # Crear el archivo CSV
-            with open(CSV_FILE_PATH, 'w') as file:
-                file.write("id_movimiento,fecha_hora,cod_producto,tipo_moneda,cantidad,id_compra,id_venta,costo_promedio_unitario,precio_unitario,clase\n")
-                for row in transformed_data:
-                    file.write(
-                        f"{row['id_movimiento']},{row['fecha_hora']},{row['cod_producto']},{row['tipo_moneda']},{row['cantidad']},{row['id_compra']},{row['id_venta']},{row['costo_promedio_unitario']},{row['precio_unitario']},{row['clase']}\n"
-                    )
-            print(f"Created CSV file: {CSV_FILE_PATH}")
-            return {"csv_file_path": CSV_FILE_PATH, "s3_object_name": s3_object_name, "last_extraction_date": last_extraction_date}
+            # Obtener el valor actual de 'last_extraction_part' y actualizarlo
+            last_extraction_part = Variable.get(LAST_EXTRACTION_PART_VAR, default_var=0)
+            s3_object_name = f"{S3_BASE_PATH}_{last_extraction_part}.parquet"
+
+            # Crear el archivo Parquet
+            pq.write_table(table, PARQUET_FILE_PATH)
+            print(f"Created Parquet file: {PARQUET_FILE_PATH}")
+            return {"parquet_file_path": PARQUET_FILE_PATH, "s3_object_name": s3_object_name, "last_extraction_date": last_extraction_date, "last_extraction_part": last_extraction_part}
         except Exception as e:
-            print(f"Error creating CSV file: {e}")
+            print(f"Error creating Parquet file: {e}")
             return None
 
-    # Task 4: Upload CSV to S3
+     # Task 4: Subir Parquet a S3
     @task
-    def upload_csv_to_s3(csv_object_data):
+    def upload_parquet_to_s3(parquet_object_data):
         s3_hook = S3Hook(aws_conn_id="aws_default")
 
-        csv_file_path = csv_object_data.get("csv_file_path")
-        s3_object_name = csv_object_data.get("s3_object_name")
-
+        parquet_file_path = parquet_object_data.get("parquet_file_path")
+        s3_object_name = parquet_object_data.get("s3_object_name")
+        
         try:
             s3_hook.load_file(
-                filename=csv_file_path,
+                filename=parquet_file_path,
                 key=s3_object_name,
                 bucket_name=BUCKET_NAME,
                 replace=True
             )
-            print(f"Uploaded CSV to S3: {s3_object_name}")
+            print(f"Uploaded Parquet to S3: {s3_object_name}")
         except Exception as e:
-            print(f"Error uploading CSV to S3: {e}")
+            print(f"Error uploading Parquet to S3: {e}")
 
-    # Task 5: Update last extraction date in Airflow Variable
+    # Task 5: Actualizar la Variable de Airflow
     @task
-    def update_last_extraction_date(csv_object_data):
-        last_extraction_date = csv_object_data.get("last_extraction_date")
+    def update_last_extraction_date(parquet_object_data):
+        last_extraction_date = parquet_object_data.get("last_extraction_date")
+
+        formatted_date = last_extraction_date.strftime('%Y-%m-%d_%H:%M:%S')
 
         # Actualiza la Variable de Airflow con la nueva fecha de extracción
-        Variable.set(LAST_EXTRACTION_VAR, last_extraction_date.strftime('%Y-%m-%d %H:%M:%S'))
-        print(f"Updated last extraction date to: {last_extraction_date}")
+        Variable.set(LAST_EXTRACTION_VAR, formatted_date)
+        print(f"Updated last extraction date to: {formatted_date}")
+
+    @task
+    def update_last_extraction_part(parquet_object_data):
+        # Incrementar last_extraction_part
+        print('type parquet')
+        print(type(parquet_object_data.get("last_extraction_part")))
+        last_extraction_part = int(parquet_object_data.get("last_extraction_part"),0) + 1
+        Variable.set(LAST_EXTRACTION_PART_VAR, str(last_extraction_part))
+        print(f"Updated last extraction part to: {last_extraction_part}")
 
     # Define task dependencies
     data = extract_data_from_mysql()
     transformed_data = transform_data(data)
-    csv_object_data = create_csv(transformed_data)
-    upload_csv_to_s3(csv_object_data)
-    update_last_extraction_date(csv_object_data)
+    parquet_object_data = create_parquet(transformed_data)
+    upload_parquet_to_s3(parquet_object_data)
+    update_last_extraction_date(parquet_object_data)
+    update_last_extraction_part(parquet_object_data)
 
 # Instantiate the DAG
 mysql_example_dag_dag = mysql_example_dag()

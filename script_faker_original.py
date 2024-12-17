@@ -10,7 +10,7 @@ def lambda_handler(event, context):
     # Configura Faker
     fake = Faker()
 
-    CANTIDAD_COMPRAS = 100
+    CANTIDAD_COMPRAS = 20
     CANTIDAD_VENTAS = CANTIDAD_COMPRAS * 1000
 
     # Conectar a la base de datos MySQL
@@ -18,7 +18,7 @@ def lambda_handler(event, context):
         host='fake-database-grupo3-1.cfqay6u8sikg.us-east-1.rds.amazonaws.com',  # Nombre del servicio definido en Docker Compose
         user='admin',
         password='awsrdsgruop3fakerlaboratorio',
-        database='bd-grupo-3-v3'
+        database='bd-grupo-3-v2'
     )
 
     cursor = connection.cursor()
@@ -26,7 +26,7 @@ def lambda_handler(event, context):
     ### INICIO PRIMERA EJECUCIÓN
 
     # Crear tabla de proveedores si no existe
-    cursor.execute(''' 
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS Proveedor (
             id_proveedor INT AUTO_INCREMENT PRIMARY KEY,
             tipo_documento VARCHAR(50) NOT NULL,
@@ -48,6 +48,8 @@ def lambda_handler(event, context):
     proveedores_count = cursor.fetchone()[0]
 
     # Insertar proveedores si la tabla está vacía
+    #if proveedores_count == 0:
+    #    for _ in range(1000):
     cursor.execute('''
         INSERT INTO Proveedor (tipo_documento, nro_documento, razon_social, nombre, apellido_pa, apellido_ma, banco, cuenta, cci, direccion)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -64,9 +66,11 @@ def lambda_handler(event, context):
         fake.address()
     ))
     print("Se insertaron proveedores.")
+    #else:
+    #    print("La tabla Proveedor ya tiene datos.")
 
     # Crear tabla de productos si no existe
-    cursor.execute(''' 
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS Producto (
             cod_producto INT AUTO_INCREMENT PRIMARY KEY,
             unidad_medida VARCHAR(50),
@@ -88,7 +92,7 @@ def lambda_handler(event, context):
         for _ in range(3000):
             precio_unitario = fake.pydecimal(left_digits=4, right_digits=2, positive=True)
             costo_promedio_unitario = fake.pydecimal(left_digits=4, right_digits=2, positive=True, max_value=float(precio_unitario) * 0.8)
-            cursor.execute(''' 
+            cursor.execute('''
                 INSERT INTO Producto (unidad_medida, tipo_moneda, costo_promedio_unitario, precio_unitario, stock_minimo, stock_maximo)
                 VALUES (%s, %s, %s, %s, %s, %s)
             ''', (
@@ -104,7 +108,7 @@ def lambda_handler(event, context):
         print("La tabla Producto ya tiene datos.")
 
     # Crear tabla de clientes si no existe
-    cursor.execute(''' 
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS Cliente (
             id_cliente INT AUTO_INCREMENT PRIMARY KEY,
             nombre VARCHAR(255) NOT NULL,
@@ -125,7 +129,7 @@ def lambda_handler(event, context):
     # Insertar 2000 clientes si la tabla está vacía
     if clientes_count == 0:
         for _ in range(10000):
-            cursor.execute(''' 
+            cursor.execute('''
                 INSERT INTO Cliente (nombre, apellido_pa, apellido_ma, direccion, tipo_documento, nro_documento, correo)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
             ''', (
@@ -142,7 +146,7 @@ def lambda_handler(event, context):
         print("La tabla Cliente ya tiene datos.")
 
     # Crear tabla de stock de productos si no existe incluyendo un campo con la fecha de la ultima actualizacion
-    cursor.execute(''' 
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS Stock (
             id_stock INT AUTO_INCREMENT PRIMARY KEY,
             id_producto INT,
@@ -164,9 +168,9 @@ def lambda_handler(event, context):
         productos = cursor.fetchall()
         for producto in productos:
             cod_producto, precio_unitario = producto
-            stock = fake.random_int(min=10, max=100)
+            stock = fake.random_int(min=0, max=100)
             stock_valorizado = float(precio_unitario) * stock
-            cursor.execute(''' 
+            cursor.execute('''
                 INSERT INTO Stock (id_producto, stock_actual, stock_valorizado, fecha_actualizacion)
                 VALUES (%s, %s, %s, %s)
             ''', (
@@ -178,7 +182,6 @@ def lambda_handler(event, context):
         print("Se insertó el stock inicial de los productos.")
     else:
         print("La tabla Stock ya tiene datos.")
-
 
     # Crear tabla de compras si no existe
     cursor.execute('''
@@ -243,7 +246,7 @@ def lambda_handler(event, context):
         monto_compra = costo_promedio_unitario * cantidad_compra
         fecha_hora = datetime.datetime.now()
 
-        cursor.execute(''' 
+        cursor.execute('''
             INSERT INTO Compra (id_proveedor, cod_producto, cantidad_compra, costo_promedio_unitario, monto_compra, fecha_hora)
             VALUES (%s, %s, %s, %s, %s, %s)
         ''', (
@@ -256,20 +259,12 @@ def lambda_handler(event, context):
         ))
         id_compra = cursor.lastrowid
 
-        cursor.execute("SELECT stock_actual, stock_valorizado FROM Stock WHERE id_producto = %s;", (cod_producto,))
-        stock_actual, stock_valorizado = cursor.fetchone()
-        nuevo_stock = stock_actual + cantidad_compra
-        nuevo_stock_valorizado = stock_valorizado + monto_compra
-
-        cursor.execute("UPDATE Stock SET stock_actual = %s, stock_valorizado = %s, fecha_actualizacion = %s WHERE id_producto = %s;",
-                       (nuevo_stock, nuevo_stock_valorizado, datetime.datetime.now().date(), cod_producto))
-
-        # Actualizar el stock del producto (asegurando que stock_valorizado no sea negativo)
-        # cursor.execute("UPDATE Stock SET stock_actual = stock_actual + %s, stock_valorizado = GREATEST(stock_valorizado + %s, 0) WHERE id_producto = %s;", 
-        #                 (cantidad_compra, monto_compra, cod_producto))
+        # Actualizar el stock del producto
+        cursor.execute("UPDATE Stock SET stock_actual = stock_actual + %s, stock_valorizado = stock_valorizado + %s WHERE id_producto = %s;",
+                    (cantidad_compra, monto_compra, cod_producto))
 
         # Insertar movimiento de producto
-        cursor.execute(''' 
+        cursor.execute('''
             INSERT INTO Movimiento_producto (fecha_hora, cod_producto, cantidad, id_compra, costo_promedio_unitario, clase)
             VALUES (%s, %s, %s, %s, %s, %s)
         ''', (
@@ -294,8 +289,47 @@ def lambda_handler(event, context):
         stock_actual, stock_valorizado = cursor.fetchone()
         
         if stock_actual < cantidad_venta:
-            cantidad_venta = stock_actual
+            # Calcular la diferencia
+            diferencia = cantidad_venta - stock_actual
+            # Realizar una compra para reponer el stock
+            cantidad_compra = diferencia  # Compensar la diferencia
+            cursor.execute("SELECT id_proveedor FROM Proveedor ORDER BY RAND() LIMIT 1;")
+            id_proveedor = cursor.fetchone()[0]
+            costo_promedio_unitario = round(Decimal(precio_unitario) * Decimal(random.uniform(0.98, 1.02)), 2)
+            monto_compra = costo_promedio_unitario * cantidad_compra
+            fecha_hora = datetime.datetime.now()
 
+            cursor.execute(''' 
+                INSERT INTO Compra (id_proveedor, cod_producto, cantidad_compra, costo_promedio_unitario, monto_compra, fecha_hora)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            ''', (
+                id_proveedor,
+                cod_producto,
+                cantidad_compra,
+                costo_promedio_unitario,
+                monto_compra,
+                fecha_hora
+            ))
+            id_compra = cursor.lastrowid
+
+            # Actualizar el stock del producto
+            cursor.execute("UPDATE Stock SET stock_actual = stock_actual + %s, stock_valorizado = stock_valorizado + %s WHERE id_producto = %s;", 
+                            (cantidad_compra, monto_compra, cod_producto))
+
+            # Insertar movimiento de producto
+            cursor.execute('''
+                INSERT INTO Movimiento_producto (fecha_hora, cod_producto, cantidad, id_compra, costo_promedio_unitario, clase)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            ''', (
+                fecha_hora,
+                cod_producto,
+                cantidad_compra,
+                id_compra,
+                costo_promedio_unitario,
+                'Ingreso'
+            ))
+
+        # Realizar la venta
         monto_venta = precio_unitario * cantidad_venta
         fecha_hora = datetime.datetime.now()
 
@@ -312,18 +346,12 @@ def lambda_handler(event, context):
         ))
         id_venta = cursor.lastrowid
 
-        nuevo_stock = stock_actual - cantidad_venta
-        nuevo_stock_valorizado = stock_valorizado - monto_venta
-
-        cursor.execute("UPDATE Stock SET stock_actual = %s, stock_valorizado = GREATEST(%s, 0), fecha_actualizacion = %s WHERE id_producto = %s;",
-                        (nuevo_stock, nuevo_stock_valorizado, datetime.datetime.now().date(), cod_producto))
-
-        # Actualizar el stock del producto (asegurando que stock_valorizado no sea negativo)
-        # cursor.execute("UPDATE Stock SET stock_actual = stock_actual - %s, stock_valorizado = GREATEST(stock_valorizado - %s, 0) WHERE id_producto = %s;", 
-        #                 (cantidad_venta, monto_venta, cod_producto))
+        # Actualizar el stock del producto (descontando la venta)
+        cursor.execute("UPDATE Stock SET stock_actual = stock_actual - %s, stock_valorizado = stock_valorizado - %s WHERE id_producto = %s;", 
+                        (cantidad_venta, monto_venta, cod_producto))
 
         # Insertar movimiento de producto
-        cursor.execute(''' 
+        cursor.execute('''
             INSERT INTO Movimiento_producto (fecha_hora, cod_producto, cantidad, id_venta, precio_unitario, clase)
             VALUES (%s, %s, %s, %s, %s, %s)
         ''', (
@@ -335,13 +363,16 @@ def lambda_handler(event, context):
             'Egreso'
         ))
 
+
+    # Confirmar los cambios en la base de datos
     connection.commit()
 
-    ### FIN PRIMERA EJECUCIÓN
-
+    # Cerrar el cursor y la conexión
     cursor.close()
     connection.close()
+
+    
     return {
         'statusCode': 200,
-        'body': json.dumps('Simulación ejecutada exitosamente')
+        'body': json.dumps('Done!')
     }
